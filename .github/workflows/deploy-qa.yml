@@ -14,7 +14,6 @@ jobs:
           host: 47.236.110.51
           username: root
           key: ${{ secrets.QA_SSH_KEY }}
-          script_stop: true
           script: |
             export APP_DIR="/opt/mini_claw"
             export REPO_URL="https://github.com/guyil/mini_claw.git"
