@@ -25,6 +25,7 @@ dependencies = [
     "python-jose[cryptography]>=3.3",
     "passlib[bcrypt]>=1.7",
     "bcrypt<4.1",
+    "beautifulsoup4>=4.12",
     "httpx>=0.28",
     "redis>=5.0",
     "docker>=7.0",
