@@ -1,0 +1,62 @@
+name: Deploy to QA
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: 47.236.110.51
+          username: root
+          key: ${{ secrets.QA_SSH_KEY }}
+          script_stop: true
+          script: |
+            export APP_DIR="/opt/mini_claw"
+            export REPO_URL="https://github.com/guyil/mini_claw.git"
+            export BRANCH="main"
+
+            # Install git if missing
+            if ! command -v git &>/dev/null; then
+              yum install -y git || apt-get install -y git
+            fi
+
+            # Clone or pull
+            if [ ! -d "$APP_DIR" ]; then
+              git clone -b "$BRANCH" "$REPO_URL" "$APP_DIR"
+            else
+              cd "$APP_DIR"
+              git fetch origin "$BRANCH"
+              git reset --hard "origin/$BRANCH"
+            fi
+
+            cd "$APP_DIR"
+
+            # Ensure .env exists
+            if [ ! -f .env ]; then
+              cp .env.example .env
+              echo "WARNING: Using default .env — please configure production values"
+            fi
+
+            # Build and deploy
+            docker compose -f docker-compose.prod.yml build --no-cache
+            docker compose -f docker-compose.prod.yml up -d
+
+            # Health check
+            sleep 8
+            for i in $(seq 1 10); do
+              if curl -sf http://localhost:8001/health; then
+                echo ""
+                echo "Deploy successful!"
+                exit 0
+              fi
+              echo "Waiting for backend... ($i)"
+              sleep 5
+            done
+            echo "Health check failed"
+            docker compose -f docker-compose.prod.yml logs --tail=50 backend
+            exit 1
