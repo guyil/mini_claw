@@ -35,9 +35,17 @@ def get_token():
         async with async_session_factory() as session:
             result = await session.execute(text("SELECT id, username FROM users LIMIT 1"))
             row = result.fetchone()
+            if row is None:
+                return None
             return _create_token(str(row[0]), row[1])
 
-    TOKEN = asyncio.run(_get())
+    try:
+        loop = asyncio.get_running_loop()
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            TOKEN = pool.submit(asyncio.run, _get()).result()
+    except RuntimeError:
+        TOKEN = asyncio.run(_get())
     return TOKEN
 
 
