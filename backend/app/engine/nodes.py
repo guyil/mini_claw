@@ -118,6 +118,7 @@ async def skill_loader_node(state: AgentState, **kwargs: Any) -> dict:
                         ToolMessage(
                             content=f"Skill '{skill_name}' 已激活，正在加载指令...",
                             tool_call_id=tc["id"],
+                            name="activate_skill",
                         )
                     )
             break
@@ -152,7 +153,20 @@ async def skill_executor_node(state: AgentState, **kwargs: Any) -> dict:
     messages = [SystemMessage(content=execution_prompt)] + list(state["messages"])
     response = await llm.ainvoke(messages, config=config)
 
-    return {"messages": [response]}
+    result_messages: list = [response]
+
+    if isinstance(response, AIMessage) and response.tool_calls:
+        for tc in response.tool_calls:
+            if tc["name"] == "skill_complete":
+                result_messages.append(
+                    ToolMessage(
+                        content=tc["args"].get("summary", "Skill 执行完成"),
+                        tool_call_id=tc["id"],
+                        name="skill_complete",
+                    )
+                )
+
+    return {"messages": result_messages}
 
 
 def route_after_router(state: AgentState) -> str:
