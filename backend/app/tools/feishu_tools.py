@@ -30,12 +30,18 @@ def create_feishu_tools(user_id: str) -> list[StructuredTool]:
         return f"[Stub] 日程已创建: {title} ({start} - {end})"
 
     async def _feishu_doc_read(doc_url_or_token: str) -> str:
+        from app.config import settings
+        if not settings.feishu_app_id or not settings.feishu_app_secret:
+            return f"[Stub] 文档内容（{doc_url_or_token}）:\n飞书凭据未配置，无法读取真实文档。"
         from app.services.feishu_service import read_document
         return await read_document(doc_url_or_token)
 
     async def _feishu_doc_create(
         title: str, content_markdown: str, folder_token: str = ""
     ) -> str:
+        from app.config import settings
+        if not settings.feishu_app_id or not settings.feishu_app_secret:
+            return f"[Stub] 文档已创建: {title}\n飞书凭据未配置，无法创建真实文档。"
         from app.services.feishu_service import create_document
         return await create_document(title, content_markdown, folder_token)
 
