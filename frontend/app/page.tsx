@@ -4,6 +4,7 @@ import { MyRuntimeProvider } from "./MyRuntimeProvider";
 import { ChatPanel } from "@/components/ChatPanel";
 import { Sidebar } from "@/components/Sidebar";
 import { clearAuth, getToken, getUser, type UserInfo } from "@/lib/auth";
+import type { LangChainMessage } from "@assistant-ui/react-langgraph";
 import { useCallback, useEffect, useState } from "react";
 
 interface ConversationItem {
@@ -19,6 +20,8 @@ export default function Home() {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [historyMessages, setHistoryMessages] = useState<LangChainMessage[]>([]);
+  const [historyLoadedFor, setHistoryLoadedFor] = useState<string | null>(null);
 
   useEffect(() => {
     setUser(getUser());
@@ -43,6 +46,38 @@ export default function Home() {
   useEffect(() => {
     fetchConversations();
   }, [fetchConversations]);
+
+  useEffect(() => {
+    if (!activeConvId || !token) {
+      setHistoryMessages([]);
+      setHistoryLoadedFor(null);
+      return;
+    }
+
+    let cancelled = false;
+    setHistoryLoadedFor(null);
+
+    fetch(`/api/conversations/${activeConvId}/messages`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (!cancelled) {
+          setHistoryMessages(data);
+          setHistoryLoadedFor(activeConvId);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHistoryMessages([]);
+          setHistoryLoadedFor(activeConvId);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeConvId, token]);
 
   useEffect(() => {
     if (token) {
@@ -171,13 +206,26 @@ export default function Home() {
         </header>
 
         <div className="flex-1 overflow-hidden">
-          <MyRuntimeProvider
-            key={activeConvId ?? "default"}
-            token={token}
-            threadId={activeConvId}
-          >
-            <ChatPanel />
-          </MyRuntimeProvider>
+          {activeConvId && historyLoadedFor !== activeConvId ? (
+            <div className="flex h-full items-center justify-center">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <svg className="size-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+                加载对话历史...
+              </div>
+            </div>
+          ) : (
+            <MyRuntimeProvider
+              key={activeConvId ?? "default"}
+              token={token}
+              threadId={activeConvId}
+              initialMessages={historyMessages}
+            >
+              <ChatPanel />
+            </MyRuntimeProvider>
+          )}
         </div>
       </div>
     </main>

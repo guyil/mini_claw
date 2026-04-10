@@ -55,18 +55,25 @@ export function MyRuntimeProvider({
   children,
   token,
   threadId,
+  initialMessages,
 }: Readonly<{
   children: ReactNode;
   token?: string | null;
   threadId?: string | null;
+  initialMessages?: LangChainMessage[];
 }>) {
   const headers = useMemo((): Record<string, string> => {
     if (token) return { Authorization: `Bearer ${token}` };
     return {};
   }, [token]);
 
+  const restoredState = useMemo(
+    (): AgentState => ({ messages: initialMessages ?? [] }),
+    [initialMessages],
+  );
+
   const runtime = useAssistantTransportRuntime({
-    initialState: { messages: [] },
+    initialState: restoredState,
     api: "/api/assistant",
     converter,
     headers,

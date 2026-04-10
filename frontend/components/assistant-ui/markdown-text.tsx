@@ -136,6 +136,8 @@ const defaultComponents = memoizeMarkdownComponents({
         "aui-md-a text-primary underline underline-offset-2 hover:text-primary/80",
         className,
       )}
+      target="_blank"
+      rel="noopener noreferrer"
       {...props}
     />
   ),

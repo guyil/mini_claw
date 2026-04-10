@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.skill import Skill
 
@@ -32,6 +34,41 @@ async def get_skill_instructions(db: AsyncSession, skill_name: str) -> str | Non
     )
     row = result.scalar_one_or_none()
     return row
+
+
+async def get_skill_with_assets(
+    db: AsyncSession, skill_name: str
+) -> dict[str, Any] | None:
+    """获取 Skill 的指令文本和所有附属资产文件。
+
+    Returns:
+        {
+            "instructions": str,
+            "assets": [{"filename": str, "content": str, "is_binary": bool}, ...]
+        }
+        如果 skill 不存在则返回 None
+    """
+    result = await db.execute(
+        select(Skill)
+        .options(selectinload(Skill.assets))
+        .where(Skill.name == skill_name)
+    )
+    skill = result.scalar_one_or_none()
+    if skill is None:
+        return None
+
+    return {
+        "instructions": skill.instructions,
+        "required_tools": skill.required_tools,
+        "assets": [
+            {
+                "filename": a.filename,
+                "content": a.content,
+                "is_binary": a.is_binary,
+            }
+            for a in skill.assets
+        ],
+    }
 
 
 async def list_skills(db: AsyncSession) -> list[dict]:

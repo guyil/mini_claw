@@ -26,6 +26,12 @@ class AgentState(TypedDict):
     # 当前 Skill 的完整指令文本
     skill_instructions: str
 
+    # 当前 Skill 的附属资产文件 [{filename, content, is_binary}]
+    skill_assets: list[dict[str, Any]]
+
+    # 当前 Skill 声明需要的工具列表（用于过滤）
+    skill_required_tools: list[str] | None
+
     # 从 memory 检索到的上下文
     memory_context: str
 

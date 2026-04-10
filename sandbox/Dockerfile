@@ -1,6 +1,12 @@
-FROM ubuntu:24.04
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+RUN sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null; \
+    sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null; \
+    sed -i 's|http://archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null; \
+    sed -i 's|http://security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null; \
+    true
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # 网络工具
@@ -21,11 +27,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bash coreutils unzip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --break-system-packages \
+RUN pip3 install --break-system-packages -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
     requests beautifulsoup4 pandas openpyxl \
     aiohttp lxml cssselect
 
-RUN useradd -m -u 1000 -s /bin/bash agent
+RUN useradd -m -s /bin/bash agent || usermod -l agent -d /home/agent -m $(getent passwd 1000 | cut -d: -f1) 2>/dev/null || true
 
 USER agent
 WORKDIR /workspace

@@ -6,9 +6,13 @@
 3. 系统 prompt 能按人设回复
 4. tool calling 能正确触发
 5. activate_skill 路由能正确工作
+
+用 `pytest -m llm` 显式运行。
 """
 
 import pytest
+
+pytestmark = pytest.mark.llm
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI

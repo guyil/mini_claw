@@ -1,11 +1,12 @@
 """对话管理 API
 
 提供：
-- GET  /conversations       — 当前用户的对话列表
-- POST /conversations       — 创建新对话
-- PATCH /conversations/{id} — 更新对话标题
-- DELETE /conversations/{id} — 删除对话
-- GET  /user/bot            — 获取/自动创建当前用户的 Bot
+- GET  /conversations              — 当前用户的对话列表
+- POST /conversations              — 创建新对话
+- PATCH /conversations/{id}        — 更新对话标题
+- DELETE /conversations/{id}       — 删除对话
+- GET  /conversations/{id}/messages — 获取对话历史消息
+- GET  /user/bot                   — 获取/自动创建当前用户的 Bot
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from app.config import settings
 from app.database import get_db
 from app.models.bot import Bot
 from app.models.conversation import Conversation
+from app.models.message import Message
 from app.models.skill import Skill
 
 router = APIRouter(tags=["conversations"])
@@ -175,3 +177,44 @@ async def delete_conversation(
     )
     await db.commit()
     return {"ok": True}
+
+
+@router.get("/conversations/{conv_id}/messages")
+async def get_conversation_messages(
+    conv_id: str,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取对话的历史消息，用于前端恢复对话上下文"""
+    conv_uuid = uuid.UUID(conv_id)
+
+    result = await db.execute(
+        select(Conversation).where(
+            Conversation.id == conv_uuid,
+            Conversation.user_id == uuid.UUID(user_id),
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="对话不存在")
+
+    result = await db.execute(
+        select(Message)
+        .where(Message.conversation_id == conv_uuid)
+        .order_by(Message.created_at.asc())
+    )
+    messages = result.scalars().all()
+
+    return [
+        {
+            "type": msg.role,
+            "content": msg.content,
+            **(
+                {
+                    k: v
+                    for k, v in (msg.metadata_ or {}).items()
+                    if k in ("tool_calls", "id", "tool_call_id")
+                }
+            ),
+        }
+        for msg in messages
+    ]

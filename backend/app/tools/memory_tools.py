@@ -117,7 +117,7 @@ def create_memory_tools(db: AsyncSession | None, bot_id: str) -> list[Structured
         await db.execute(
             update(Bot).where(Bot.id == _uuid.UUID(bot_id)).values(**updates)
         )
-        await db.commit()
+        await db.flush()
 
         changed = "、".join(updates.keys())
         return f"已更新 Bot（{changed}）。下次对话将使用新的人格设定。"
@@ -141,7 +141,7 @@ def create_memory_tools(db: AsyncSession | None, bot_id: str) -> list[Structured
         await db.execute(
             update(Bot).where(Bot.id == bot_id).values(user_context=updated)
         )
-        await db.commit()
+        await db.flush()
         return f"已更新用户画像: {addition}"
 
     return [

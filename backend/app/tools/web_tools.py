@@ -1,30 +1,153 @@
-"""Web 工具 — 网页内容抓取
+"""Web 工具 — 网页内容抓取 (Crawl4AI 版)
 
-提供 web_fetch 工具，使用 httpx 获取网页并用 BeautifulSoup 提取正文。
-对 Amazon 产品页做特殊处理，提取 listing 关键信息。
+使用 Crawl4AI 进行网页抓取，支持 JavaScript 渲染和反爬虫绕过。
+对 Amazon 产品页做特殊处理，从渲染后的 HTML 提取 listing 关键信息。
+通用网页直接使用 Crawl4AI 的 Markdown 输出，确保 LLM 可读性。
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 from langchain_core.tools import StructuredTool
 
 logger = logging.getLogger(__name__)
 
-_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-}
+_MAX_CONTENT_LENGTH = 20000
 
 
 def _is_amazon_url(url: str) -> bool:
     return bool(re.search(r"amazon\.(com|co\.\w+|de|fr|it|es|ca|com\.au)", url))
+
+
+def _detect_amazon_page_type(url: str) -> str:
+    """判断 Amazon URL 的页面类型：product / bestsellers / search / other"""
+    if re.search(r"/dp/[A-Z0-9]{4,10}", url):
+        return "product"
+    if re.search(r"/(gp/)?bestsellers/", url) or "/zgbs/" in url:
+        return "bestsellers"
+    if re.search(r"/s\?", url) or "/s/" in url:
+        return "search"
+    return "other"
+
+
+def _extract_amazon_list_page(html: str, page_type: str) -> str | None:
+    """从 Amazon 列表页 (Best Sellers / 搜索结果) 提取产品列表
+
+    返回结构化文本，如果无法提取则返回 None。
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    products: list[dict[str, str]] = []
+
+    if page_type == "bestsellers":
+        items = soup.find_all("div", id="gridItemRoot")
+        if not items:
+            items = soup.find_all("div", class_="zg-grid-general-faceout")
+
+        for item in items:
+            product: dict[str, str] = {}
+
+            rank_el = item.find("span", class_="zg-bdg-text")
+            if rank_el:
+                product["rank"] = rank_el.get_text(strip=True)
+
+            link_el = item.find("a", class_="a-link-normal", href=re.compile(r"/dp/[A-Z0-9]"))
+            if link_el:
+                href = link_el.get("href", "")
+                asin_match = re.search(r"/dp/([A-Z0-9]{10})", href)
+                if asin_match:
+                    product["asin"] = asin_match.group(1)
+
+            title_el = item.find("span", class_=re.compile(r"a-size-.*a-text-normal"))
+            if not title_el:
+                title_el = item.find("div", class_="_cDEzb_p13n-sc-css-line-clamp-1_1Fn1y")
+            if not title_el and link_el:
+                img = link_el.find("img")
+                if img and img.get("alt"):
+                    product["title"] = img["alt"]
+            if title_el:
+                product["title"] = title_el.get_text(strip=True)
+
+            rating_el = item.find("span", class_="a-icon-alt")
+            if rating_el:
+                product["rating"] = rating_el.get_text(strip=True)
+
+            price_el = item.find("span", class_="a-offscreen")
+            if price_el:
+                product["price"] = price_el.get_text(strip=True)
+
+            review_els = item.find_all("span", class_="a-size-small")
+            for el in review_els:
+                text = el.get_text(strip=True)
+                if text and re.match(r"[\d,]+$", text):
+                    product["reviews"] = text
+                    break
+
+            if product.get("title") or product.get("asin"):
+                products.append(product)
+
+    elif page_type == "search":
+        items = soup.find_all("div", attrs={"data-component-type": "s-search-result"})
+
+        for idx, item in enumerate(items, 1):
+            product: dict[str, str] = {"rank": f"#{idx}"}
+
+            asin = item.get("data-asin", "")
+            if asin:
+                product["asin"] = asin
+
+            title_el = item.find("h2")
+            if title_el:
+                product["title"] = title_el.get_text(strip=True)
+
+            rating_el = item.find("span", class_="a-icon-alt")
+            if rating_el:
+                product["rating"] = rating_el.get_text(strip=True)
+
+            price_el = item.find("span", class_="a-offscreen")
+            if price_el:
+                product["price"] = price_el.get_text(strip=True)
+
+            review_els = item.find_all("span", class_="a-size-base")
+            for el in review_els:
+                text = el.get_text(strip=True)
+                if text and re.match(r"[\d,]+$", text):
+                    product["reviews"] = text
+                    break
+
+            if product.get("title") or product.get("asin"):
+                products.append(product)
+
+    if not products:
+        return None
+
+    lines: list[str] = [f"**Amazon 列表页抓取结果** (共 {len(products)} 个商品)\n"]
+    for p in products:
+        rank = p.get("rank", "?")
+        title = p.get("title", "未知标题")
+        asin = p.get("asin", "")
+        price = p.get("price", "")
+        rating = p.get("rating", "")
+        reviews = p.get("reviews", "")
+
+        line = f"**{rank}** {title}"
+        if asin:
+            line += f"\n  - ASIN: {asin}"
+            line += f" | 链接: https://www.amazon.com/dp/{asin}"
+        if price:
+            line += f"\n  - 价格: {price}"
+        if rating:
+            line += f"\n  - 评分: {rating}"
+        if reviews:
+            line += f" | 评论数: {reviews}"
+        lines.append(line)
+
+    return "\n\n".join(lines)
 
 
 def _extract_amazon_listing(html: str) -> str:
@@ -65,7 +188,9 @@ def _extract_amazon_listing(html: str) -> str:
     if bullets_el:
         items = bullets_el.find_all("span", class_="a-list-item")
         if items:
-            bullet_text = "\n".join(f"  - {li.get_text(strip=True)}" for li in items if li.get_text(strip=True))
+            bullet_text = "\n".join(
+                f"  - {li.get_text(strip=True)}" for li in items if li.get_text(strip=True)
+            )
             parts.append(f"**卖点 (Bullet Points)**:\n{bullet_text}")
 
     desc_el = soup.find("div", id="productDescription")
@@ -97,7 +222,7 @@ def _extract_amazon_listing(html: str) -> str:
 
 
 def _extract_general_content(html: str, url: str) -> str:
-    """通用网页正文提取"""
+    """通用网页正文提取 — 当 Crawl4AI markdown 不可用时的后备"""
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, "html.parser")
@@ -116,8 +241,8 @@ def _extract_general_content(html: str, url: str) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     text = "\n".join(lines)
 
-    if len(text) > 5000:
-        text = text[:5000] + "\n\n... (内容已截断)"
+    if len(text) > _MAX_CONTENT_LENGTH:
+        text = text[:_MAX_CONTENT_LENGTH] + "\n\n... (内容已截断)"
 
     result = f"**页面标题**: {title}\n**URL**: {url}\n\n{text}"
     return result
@@ -135,6 +260,7 @@ def _recover_url(sanitized_url: str, reference_urls: list[str]) -> str:
         return reference_urls[0]
 
     from urllib.parse import urlparse
+
     sanitized_host = urlparse(sanitized_url).netloc
     for ref_url in reference_urls:
         ref_host = urlparse(ref_url).netloc
@@ -142,6 +268,82 @@ def _recover_url(sanitized_url: str, reference_urls: list[str]) -> str:
             return ref_url
 
     return reference_urls[0] if reference_urls else sanitized_url
+
+
+# ── Crawl4AI 浏览器实例管理 ────────────────────────────
+
+
+class CrawlerManager:
+    """管理 Crawl4AI 浏览器实例的生命周期。
+
+    惰性初始化：首次调用 get_crawler() 时启动浏览器。
+    复用实例：后续调用返回同一浏览器，避免重复启动开销。
+    应用退出时调用 shutdown() 释放资源。
+    """
+
+    def __init__(self) -> None:
+        self._crawler: AsyncWebCrawler | None = None
+        self._started: bool = False
+
+    async def get_crawler(self) -> AsyncWebCrawler:
+        if not self._started:
+            browser_config = BrowserConfig(
+                headless=True,
+                enable_stealth=True,
+                extra_args=["--disable-blink-features=AutomationControlled"],
+            )
+            self._crawler = AsyncWebCrawler(config=browser_config)
+            await self._crawler.start()
+            self._started = True
+            logger.info("Crawl4AI 浏览器实例已启动 (stealth mode)")
+        return self._crawler  # type: ignore[return-value]
+
+    async def shutdown(self) -> None:
+        if self._started and self._crawler:
+            try:
+                await self._crawler.close()
+            except Exception as e:
+                logger.warning("关闭 Crawl4AI 浏览器时出错: %s", e)
+            self._started = False
+            self._crawler = None
+            logger.info("Crawl4AI 浏览器实例已关闭")
+
+
+_crawler_manager = CrawlerManager()
+
+
+async def shutdown_crawler() -> None:
+    """供 app lifespan 调用，关闭全局 Crawl4AI 浏览器"""
+    await _crawler_manager.shutdown()
+
+
+# ── 核心抓取逻辑 ──────────────────────────────────────
+
+
+async def _fetch_with_crawl4ai(url: str) -> dict[str, Any]:
+    """使用 Crawl4AI 抓取网页，返回 markdown 和 html"""
+    crawler = await _crawler_manager.get_crawler()
+
+    config = CrawlerRunConfig(
+        wait_until="load",
+        simulate_user=True,
+        excluded_tags=["nav", "header", "footer", "aside", "noscript"],
+        remove_overlay_elements=True,
+    )
+
+    result = await crawler.arun(url=url, config=config)
+
+    if not result.success:
+        raise RuntimeError(f"Crawl4AI 抓取失败: {result.error_message}")
+
+    return {
+        "markdown": result.markdown or "",
+        "html": result.html or "",
+        "url": result.url or url,
+    }
+
+
+# ── 工具创建 ──────────────────────────────────────────
 
 
 def create_web_tools(reference_urls: list[str] | None = None) -> list[StructuredTool]:
@@ -153,29 +355,36 @@ def create_web_tools(reference_urls: list[str] | None = None) -> list[Structured
     _ref_urls = reference_urls or []
 
     async def _web_fetch(url: str) -> str:
-        """抓取网页内容并提取正文。对 Amazon 产品页会自动解析 listing 详情。"""
-        import httpx
-
+        """抓取网页内容并提取正文。支持 JS 渲染和反爬虫绕过。
+        对 Amazon 产品页会自动解析 listing 详情，
+        对 Best Sellers / 搜索结果页会提取产品列表。"""
         url = _recover_url(url, _ref_urls)
 
         try:
-            async with httpx.AsyncClient(
-                timeout=30,
-                follow_redirects=True,
-                headers=_HEADERS,
-            ) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                html = resp.text
-        except httpx.HTTPStatusError as e:
-            return f"HTTP 错误 {e.response.status_code}: {url}"
+            result = await _fetch_with_crawl4ai(url)
         except Exception as e:
-            return f"请求失败: {e}"
+            return f"抓取失败: {e}"
 
         if _is_amazon_url(url):
-            return _extract_amazon_listing(html)
+            page_type = _detect_amazon_page_type(url)
 
-        return _extract_general_content(html, url)
+            if page_type == "product":
+                listing = _extract_amazon_listing(result["html"])
+                if not listing.startswith("未能解析"):
+                    return listing
+
+            elif page_type in ("bestsellers", "search"):
+                list_result = _extract_amazon_list_page(result["html"], page_type)
+                if list_result:
+                    return list_result
+
+        markdown = result["markdown"]
+        if markdown and len(markdown.strip()) > 50:
+            if len(markdown) > _MAX_CONTENT_LENGTH:
+                markdown = markdown[:_MAX_CONTENT_LENGTH] + "\n\n... (内容已截断)"
+            return f"**URL**: {result['url']}\n\n{markdown}"
+
+        return _extract_general_content(result["html"], result["url"])
 
     return [
         StructuredTool.from_function(
@@ -183,6 +392,7 @@ def create_web_tools(reference_urls: list[str] | None = None) -> list[Structured
             name="web_fetch",
             description=(
                 "抓取指定 URL 的网页内容并返回结构化文本。"
+                "使用浏览器渲染，支持 JavaScript 动态页面和反爬虫绕过。"
                 "对 Amazon 产品页会自动解析 listing 详情（标题、价格、评分、卖点等）。"
                 "传入完整的 URL。"
             ),

@@ -10,15 +10,18 @@ Mini Claw (小爪) is a cross-border e-commerce AI assistant platform. It uses a
 
 ### Backend
 
+Backend uses a Python 3.11 venv at `backend/.venv/`. All commands should run through the venv.
+
 ```bash
 cd backend
-uvicorn app.main:app --reload --port 8000          # Start dev server
-python3 -m pytest tests/ -v                         # Run all tests
-python3 -m pytest tests/test_api/test_health.py -v  # Run single test file
-alembic upgrade head                                # Apply DB migrations
-alembic revision --autogenerate -m "description"    # Create new migration
-ruff check app/                                     # Lint
-ruff format app/                                    # Format
+source .venv/bin/activate                            # Activate venv (or use .venv/bin/python directly)
+.venv/bin/python -m uvicorn app.main:app --reload --port 8000  # Start dev server
+.venv/bin/python -m pytest tests/ -v                 # Run all tests
+.venv/bin/python -m pytest tests/test_api/test_health.py -v    # Run single test file
+.venv/bin/python -m alembic upgrade head             # Apply DB migrations
+.venv/bin/python -m alembic revision --autogenerate -m "description"  # Create new migration
+.venv/bin/ruff check app/                            # Lint
+.venv/bin/ruff format app/                           # Format
 ```
 
 ### Frontend
@@ -58,7 +61,7 @@ START → memory → router → (direct_answer→END | use_tool→tool_executor�
 
 ### Tools (`backend/app/tools/`)
 
-LangChain tools injected into the agent: `memory_tools` (vector-based memory with pgvector), `sandbox_tools` (Docker container code execution), `feishu_tools` (Feishu/Lark API integration), `web_tools` (URL fetching).
+LangChain tools injected into the agent: `memory_tools` (vector-based memory with pgvector), `sandbox_tools` (Docker container code execution), `feishu_tools` (Feishu/Lark API integration), `web_tools` (Crawl4AI browser-based web scraping with stealth mode and JS rendering).
 
 ### Skills System
 

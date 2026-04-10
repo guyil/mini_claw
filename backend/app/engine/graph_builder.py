@@ -28,9 +28,13 @@ from app.engine.nodes import (
 from app.engine.state import AgentState
 from app.services.bot_service import get_bot_config
 from app.services.skill_service import get_skills_summary
+from app.services.sandbox_pool import SandboxPoolManager
 from app.tools.memory_tools import create_memory_tools
 from app.tools.sandbox_tools import create_sandbox_tools
 from app.tools.feishu_tools import create_feishu_tools
+from app.tools.perplexity_tools import create_perplexity_tools
+from app.tools.schedule_tools import create_schedule_tools
+from app.tools.skill_install_tools import create_skill_install_tools
 from app.tools.web_tools import create_web_tools
 
 logger = logging.getLogger(__name__)
@@ -81,6 +85,7 @@ async def build_agent_graph(
     user_id: str,
     session_key: str,
     reference_urls: list[str] | None = None,
+    sandbox_pool: SandboxPoolManager | None = None,
 ) -> tuple[StateGraph, dict[str, Any]]:
     """为指定 Bot 动态构建 LangGraph StateGraph
 
@@ -109,9 +114,12 @@ async def build_agent_graph(
     all_tools.append(_create_activate_skill_tool())
     all_tools.append(_create_skill_complete_tool())
     all_tools.extend(create_memory_tools(db, bot_id))
-    all_tools.extend(create_sandbox_tools(session_key, user_id))
-    all_tools.extend(create_feishu_tools(user_id))
+    all_tools.extend(create_sandbox_tools(session_key, user_id, sandbox_pool=sandbox_pool))
+    all_tools.extend(create_feishu_tools(db, user_id))
     all_tools.extend(create_web_tools(reference_urls=reference_urls))
+    all_tools.extend(create_perplexity_tools())
+    all_tools.extend(create_schedule_tools(user_id, bot_id, session_key))
+    all_tools.extend(create_skill_install_tools(db, bot_id, user_id))
 
     shared_kwargs: dict[str, Any] = {
         "db": db,
@@ -168,6 +176,8 @@ async def build_agent_graph(
         "available_skills": skills_summary,
         "active_skill": None,
         "skill_instructions": "",
+        "skill_assets": [],
+        "skill_required_tools": None,
         "memory_context": "",
         "session_key": session_key,
         "user_id": user_id,

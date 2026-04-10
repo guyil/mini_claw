@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db, get_db_optional
 from app.models.user import User
+from app.services.feishu_service import diagnose_feishu_auth, build_feishu_authorize_url
 
 logger = logging.getLogger(__name__)
 
@@ -148,15 +149,7 @@ async def feishu_login():
     """重定向到飞书 OAuth 授权页面"""
     if not settings.feishu_app_id:
         raise HTTPException(status_code=500, detail="飞书 App ID 未配置")
-
-    params = {
-        "client_id": settings.feishu_app_id,
-        "redirect_uri": settings.feishu_redirect_uri,
-        "response_type": "code",
-        "state": uuid.uuid4().hex,
-    }
-    url = f"{FEISHU_AUTHORIZE_URL}?{urlencode(params)}"
-    return RedirectResponse(url=url)
+    return RedirectResponse(url=build_feishu_authorize_url(source="login"))
 
 
 async def _get_feishu_app_access_token() -> str:
@@ -248,7 +241,7 @@ async def feishu_callback(
             feishu_open_id=open_id,
             feishu_access_token=feishu_user["access_token"],
             feishu_refresh_token=feishu_user["refresh_token"],
-            feishu_token_expires_at=datetime.utcnow()
+            feishu_token_expires_at=datetime.now(timezone.utc)
             + timedelta(seconds=feishu_user["expires_in"]),
         )
         db.add(user)
@@ -256,7 +249,7 @@ async def feishu_callback(
     else:
         user.feishu_access_token = feishu_user["access_token"]
         user.feishu_refresh_token = feishu_user["refresh_token"]
-        user.feishu_token_expires_at = datetime.utcnow() + timedelta(
+        user.feishu_token_expires_at = datetime.now(timezone.utc) + timedelta(
             seconds=feishu_user["expires_in"]
         )
         if feishu_user.get("name"):
@@ -271,3 +264,15 @@ async def feishu_callback(
         "username": user.username,
         "display_name": user.display_name,
     }
+
+
+@router.get("/feishu/diagnose")
+async def feishu_diagnose(
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """诊断飞书认证状态和权限
+
+    返回 tenant_token / user_token 状态、权限范围、以及修复建议。
+    """
+    return await diagnose_feishu_auth(db, user_id)

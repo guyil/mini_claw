@@ -7,6 +7,9 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BACKEND_DIR="$PROJECT_DIR/backend"
+VENV_DIR="$BACKEND_DIR/.venv"
+PYTHON="$VENV_DIR/bin/python"
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
 
@@ -81,6 +84,13 @@ main() {
 
     check_deps
 
+    # 0) 检查 venv
+    if [ ! -f "$PYTHON" ]; then
+        log_error "未找到 venv，请先运行: ./scripts/init-dev.sh"
+        exit 1
+    fi
+    log_ok "使用 venv: $($PYTHON --version)"
+
     # 1) 释放端口
     log_info "检查端口占用..."
     kill_port $BACKEND_PORT
@@ -93,11 +103,11 @@ main() {
         log_ok "前端依赖安装完成"
     fi
 
-    # 3) 启动后端
+    # 3) 启动后端 (使用 venv Python)
     log_info "启动后端 (FastAPI :$BACKEND_PORT)..."
     (
-        cd "$PROJECT_DIR/backend"
-        python3 -m uvicorn app.main:app --reload --port $BACKEND_PORT 2>&1 \
+        cd "$BACKEND_DIR"
+        "$PYTHON" -m uvicorn app.main:app --reload --port $BACKEND_PORT 2>&1 \
             | while IFS= read -r line; do echo -e "${BLUE}[后端]${NC} $line"; done
     ) &
     BACKEND_PID=$!

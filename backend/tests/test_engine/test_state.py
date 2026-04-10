@@ -12,6 +12,7 @@ def test_agent_state_structure():
         "available_skills",
         "active_skill",
         "skill_instructions",
+        "skill_assets",
         "memory_context",
         "session_key",
         "user_id",

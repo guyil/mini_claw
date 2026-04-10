@@ -7,6 +7,8 @@
 4. Web 工具调用
 5. Skill 激活与执行
 6. 工具调用后的上下文连续性
+
+需要运行中的后端服务。用 `pytest -m e2e` 显式运行。
 """
 
 import asyncio
@@ -14,7 +16,10 @@ import copy
 import json
 import sys
 
+import pytest
 import requests
+
+pytestmark = pytest.mark.e2e
 
 BACKEND = "http://localhost:8000"
 TOKEN = None

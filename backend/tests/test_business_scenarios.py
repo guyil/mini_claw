@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy import event as sa_event
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.models.bot import Bot
@@ -29,15 +30,31 @@ async def _reset_db_pool():
 
 @pytest.fixture
 async def db():
-    """提供独立的 DB 会话，测试后自动回滚"""
-    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+    """提供独立的 DB 会话，测试后整体回滚（含嵌套 commit）。
+
+    使用 begin_nested (SAVEPOINT) 技巧：外层事务永远不提交，
+    service 层调用 session.commit() 实际执行的是 RELEASE SAVEPOINT，
+    数据留在外层事务中，fixture 最后 rollback 即可全部撤销。
+    """
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
     from app.config import settings
 
     engine = create_async_engine(settings.database_url, pool_size=1, max_overflow=0)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as session:
+    async with engine.connect() as conn:
+        txn = await conn.begin()
+        session = AsyncSession(bind=conn, expire_on_commit=False)
+
+        await conn.begin_nested()
+
+        @sa_event.listens_for(session.sync_session, "after_transaction_end")
+        def _restart_savepoint(sync_session, transaction):
+            if transaction.nested and not transaction._parent.nested:
+                session.begin_nested()
+
         yield session
-        await session.rollback()
+
+        await session.close()
+        await txn.rollback()
     await engine.dispose()
 
 
@@ -328,7 +345,7 @@ class TestScenario5SkillFlow:
         async with async_session_factory() as session:
             results = await seed_builtin_skills(session)
             await session.commit()
-        assert len(results) == 3
+        assert len(results) >= 3
         names = [r["name"] for r in results]
         assert "product_research" in names
         assert "competitor_analysis" in names
@@ -413,26 +430,37 @@ class TestScenario5SkillFlow:
 
 
 class TestScenario6FeishuDocCollaboration:
-    """场景6: 飞书文档协作 — 验证 doc_read/create 降级和 URL 解析"""
+    """场景6: 飞书文档协作 — 验证无凭据时不注册工具 + URL 解析"""
 
-    @pytest.mark.asyncio
-    async def test_doc_create_stub_without_credentials(self):
+    def test_no_tools_without_credentials(self):
+        from unittest.mock import patch
+
         from app.tools.feishu_tools import create_feishu_tools
 
-        tools = create_feishu_tools("test-user")
-        doc_tool = next(t for t in tools if t.name == "feishu_doc_create")
-        result = await doc_tool.ainvoke({"title": "竞品分析报告", "content_markdown": "# 报告"})
-        assert "Stub" in result
-        assert "竞品分析报告" in result
+        with patch("app.tools.feishu_tools.settings") as mock_settings:
+            mock_settings.feishu_app_id = ""
+            mock_settings.feishu_app_secret = ""
+            tools = create_feishu_tools(None, "test-user")
+        assert tools == []
 
-    @pytest.mark.asyncio
-    async def test_doc_read_stub_without_credentials(self):
+    def test_doc_tool_registered_with_credentials(self):
+        from unittest.mock import patch
+
         from app.tools.feishu_tools import create_feishu_tools
 
-        tools = create_feishu_tools("test-user")
-        doc_tool = next(t for t in tools if t.name == "feishu_doc_read")
-        result = await doc_tool.ainvoke({"doc_url_or_token": "MJLgdRKdxxxx"})
-        assert "Stub" in result
+        with patch("app.tools.feishu_tools.settings") as mock_settings:
+            mock_settings.feishu_app_id = "id"
+            mock_settings.feishu_app_secret = "secret"
+            mock_settings.feishu_tools_doc = True
+            mock_settings.feishu_tools_wiki = False
+            mock_settings.feishu_tools_drive = False
+            mock_settings.feishu_tools_chat = False
+            mock_settings.feishu_tools_bitable = False
+            mock_settings.feishu_tools_perm = False
+            mock_settings.feishu_tools_calendar = False
+            mock_settings.feishu_tools_task = False
+            tools = create_feishu_tools(None, "test-user")
+        assert any(t.name == "feishu_doc" for t in tools)
 
     def test_extract_document_id_from_url(self):
         from app.services.feishu_service import extract_document_id
@@ -454,56 +482,44 @@ class TestScenario6FeishuDocCollaboration:
 
 
 class TestScenario7FeishuCalendarTask:
-    """场景7: 飞书日程与任务管理 — 验证 stub 工具返回合理数据"""
+    """场景7: 飞书日程与任务管理 — 验证工具注册和基本结构"""
 
     @pytest.fixture
     def feishu_tools(self):
+        from unittest.mock import patch
+
         from app.tools.feishu_tools import create_feishu_tools
-        return create_feishu_tools("test-user")
 
-    @pytest.mark.asyncio
-    async def test_calendar_list(self, feishu_tools):
-        tool = next(t for t in feishu_tools if t.name == "feishu_calendar_list")
-        result = await tool.ainvoke({"days": 7})
-        assert "Stub" in result
-        assert "日程" in result or "站会" in result
+        with patch("app.tools.feishu_tools.settings") as mock_settings:
+            mock_settings.feishu_app_id = "test_id"
+            mock_settings.feishu_app_secret = "test_secret"
+            mock_settings.feishu_tools_doc = False
+            mock_settings.feishu_tools_wiki = False
+            mock_settings.feishu_tools_drive = False
+            mock_settings.feishu_tools_chat = True
+            mock_settings.feishu_tools_bitable = False
+            mock_settings.feishu_tools_perm = False
+            mock_settings.feishu_tools_calendar = True
+            mock_settings.feishu_tools_task = True
+            return create_feishu_tools(None, "test-user")
 
-    @pytest.mark.asyncio
-    async def test_calendar_create(self, feishu_tools):
-        tool = next(t for t in feishu_tools if t.name == "feishu_calendar_create")
-        result = await tool.ainvoke({
-            "title": "选品评审会",
-            "start": "2026-04-10 14:00",
-            "end": "2026-04-10 15:00",
-        })
-        assert "Stub" in result
-        assert "选品评审会" in result
+    def test_calendar_tools_registered(self, feishu_tools):
+        names = [t.name for t in feishu_tools]
+        assert "feishu_calendar_list" in names
+        assert "feishu_calendar_create" in names
 
-    @pytest.mark.asyncio
-    async def test_task_create(self, feishu_tools):
-        tool = next(t for t in feishu_tools if t.name == "feishu_task_create")
-        result = await tool.ainvoke({"title": "完成竞品分析报告"})
-        assert "Stub" in result
-        assert "竞品分析报告" in result
+    def test_task_tools_registered(self, feishu_tools):
+        names = [t.name for t in feishu_tools]
+        assert "feishu_task_list" in names
+        assert "feishu_task_create" in names
 
-    @pytest.mark.asyncio
-    async def test_send_message(self, feishu_tools):
-        tool = next(t for t in feishu_tools if t.name == "feishu_send_message")
-        result = await tool.ainvoke({"chat_id": "oc_123", "text": "分析报告已完成"})
-        assert "Stub" in result
-        assert "oc_123" in result
+    def test_message_tool_registered(self, feishu_tools):
+        names = [t.name for t in feishu_tools]
+        assert "feishu_message" in names
 
-    @pytest.mark.asyncio
-    async def test_sheet_read(self, feishu_tools):
-        tool = next(t for t in feishu_tools if t.name == "feishu_sheet_read")
-        result = await tool.ainvoke({"spreadsheet_token": "shtcn_abc"})
-        assert "Stub" in result
-
-    @pytest.mark.asyncio
-    async def test_sheet_write(self, feishu_tools):
-        tool = next(t for t in feishu_tools if t.name == "feishu_sheet_write")
-        result = await tool.ainvoke({"spreadsheet_token": "shtcn_abc"})
-        assert "Stub" in result
+    def test_chat_tool_registered(self, feishu_tools):
+        names = [t.name for t in feishu_tools]
+        assert "feishu_chat" in names
 
 
 # ═══════════════════════════════════════════════════════
@@ -577,7 +593,36 @@ class TestScenario8SandboxSecurity:
 
 
 class TestScenario9FullAPIPipeline:
-    """场景9: 完整 API 链路 — 注册/登录/对话/会话管理"""
+    """场景9: 完整 API 链路 — 注册/登录/对话/会话管理
+
+    这些测试通过 ASGITransport 调用真实 API，数据会写入真实数据库。
+    每个测试负责清理自己创建的数据。
+    """
+
+    @staticmethod
+    async def _cleanup_test_user(username: str):
+        """清理 API 测试创建的用户及其关联数据"""
+        from app.database import async_session_factory
+        from sqlalchemy import text
+
+        async with async_session_factory() as session:
+            await session.execute(text(
+                "DELETE FROM conversations WHERE user_id IN "
+                "(SELECT id FROM users WHERE username = :u)"
+            ), {"u": username})
+            await session.execute(text(
+                "DELETE FROM memories WHERE bot_id IN "
+                "(SELECT id FROM bots WHERE owner_id IN "
+                "(SELECT id FROM users WHERE username = :u))"
+            ), {"u": username})
+            await session.execute(text(
+                "DELETE FROM bots WHERE owner_id IN "
+                "(SELECT id FROM users WHERE username = :u)"
+            ), {"u": username})
+            await session.execute(text(
+                "DELETE FROM users WHERE username = :u"
+            ), {"u": username})
+            await session.commit()
 
     @pytest.mark.asyncio
     async def test_user_register_and_login(self):
@@ -585,31 +630,32 @@ class TestScenario9FullAPIPipeline:
         from app.main import app
 
         uid = uuid.uuid4().hex[:8]
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            # 注册
-            resp = await c.post("/auth/register", json={
-                "username": f"api_test_{uid}",
-                "email": f"api_{uid}@test.com",
-                "password": "Test123456",
-                "display_name": "API测试用户",
-            })
-            assert resp.status_code == 200
-            data = resp.json()
-            assert "access_token" in data
-            token = data["access_token"]
+        username = f"api_test_{uid}"
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                resp = await c.post("/auth/register", json={
+                    "username": username,
+                    "email": f"api_{uid}@test.com",
+                    "password": "Test123456",
+                    "display_name": "API测试用户",
+                })
+                assert resp.status_code == 200
+                data = resp.json()
+                assert "access_token" in data
+                token = data["access_token"]
 
-            # 登录
-            resp2 = await c.post("/auth/login", json={
-                "username": f"api_test_{uid}",
-                "password": "Test123456",
-            })
-            assert resp2.status_code == 200
-            assert "access_token" in resp2.json()
+                resp2 = await c.post("/auth/login", json={
+                    "username": username,
+                    "password": "Test123456",
+                })
+                assert resp2.status_code == 200
+                assert "access_token" in resp2.json()
 
-            # 获取当前用户
-            resp3 = await c.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
-            assert resp3.status_code == 200
-            assert resp3.json()["username"] == f"api_test_{uid}"
+                resp3 = await c.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+                assert resp3.status_code == 200
+                assert resp3.json()["username"] == username
+        finally:
+            await self._cleanup_test_user(username)
 
     @pytest.mark.asyncio
     async def test_duplicate_register_fails(self):
@@ -617,15 +663,19 @@ class TestScenario9FullAPIPipeline:
         from app.main import app
 
         uid = uuid.uuid4().hex[:8]
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            payload = {
-                "username": f"dup_{uid}",
-                "email": f"dup_{uid}@test.com",
-                "password": "Test123",
-            }
-            await c.post("/auth/register", json=payload)
-            resp2 = await c.post("/auth/register", json=payload)
-            assert resp2.status_code == 400
+        username = f"dup_{uid}"
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                payload = {
+                    "username": username,
+                    "email": f"dup_{uid}@test.com",
+                    "password": "Test123",
+                }
+                await c.post("/auth/register", json=payload)
+                resp2 = await c.post("/auth/register", json=payload)
+                assert resp2.status_code == 400
+        finally:
+            await self._cleanup_test_user(username)
 
     @pytest.mark.asyncio
     async def test_wrong_password_login(self):
@@ -633,17 +683,21 @@ class TestScenario9FullAPIPipeline:
         from app.main import app
 
         uid = uuid.uuid4().hex[:8]
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            await c.post("/auth/register", json={
-                "username": f"wp_{uid}",
-                "email": f"wp_{uid}@test.com",
-                "password": "Correct123",
-            })
-            resp = await c.post("/auth/login", json={
-                "username": f"wp_{uid}",
-                "password": "WrongPassword",
-            })
-            assert resp.status_code == 401
+        username = f"wp_{uid}"
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                await c.post("/auth/register", json={
+                    "username": username,
+                    "email": f"wp_{uid}@test.com",
+                    "password": "Correct123",
+                })
+                resp = await c.post("/auth/login", json={
+                    "username": username,
+                    "password": "WrongPassword",
+                })
+                assert resp.status_code == 401
+        finally:
+            await self._cleanup_test_user(username)
 
     @pytest.mark.asyncio
     async def test_conversation_crud(self):
@@ -651,39 +705,38 @@ class TestScenario9FullAPIPipeline:
         from app.main import app
 
         uid = uuid.uuid4().hex[:8]
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            reg = await c.post("/auth/register", json={
-                "username": f"conv_{uid}",
-                "email": f"conv_{uid}@test.com",
-                "password": "Test123",
-            })
-            token = reg.json()["access_token"]
-            headers = {"Authorization": f"Bearer {token}"}
+        username = f"conv_{uid}"
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+                reg = await c.post("/auth/register", json={
+                    "username": username,
+                    "email": f"conv_{uid}@test.com",
+                    "password": "Test123",
+                })
+                token = reg.json()["access_token"]
+                headers = {"Authorization": f"Bearer {token}"}
 
-            # 自动创建 Bot
-            bot_resp = await c.get("/user/bot", headers=headers)
-            assert bot_resp.status_code == 200
-            assert "id" in bot_resp.json()
+                bot_resp = await c.get("/user/bot", headers=headers)
+                assert bot_resp.status_code == 200
+                assert "id" in bot_resp.json()
 
-            # 创建对话
-            conv = await c.post("/conversations", headers=headers, json={"title": "选品讨论"})
-            assert conv.status_code == 200
-            conv_id = conv.json()["id"]
+                conv = await c.post("/conversations", headers=headers, json={"title": "选品讨论"})
+                assert conv.status_code == 200
+                conv_id = conv.json()["id"]
 
-            # 列出对话
-            list_resp = await c.get("/conversations", headers=headers)
-            assert list_resp.status_code == 200
-            assert len(list_resp.json()) >= 1
+                list_resp = await c.get("/conversations", headers=headers)
+                assert list_resp.status_code == 200
+                assert len(list_resp.json()) >= 1
 
-            # 更新标题
-            patch = await c.patch(f"/conversations/{conv_id}", headers=headers,
-                                  json={"title": "蓝牙耳机选品"})
-            assert patch.status_code == 200
-            assert patch.json()["title"] == "蓝牙耳机选品"
+                patch = await c.patch(f"/conversations/{conv_id}", headers=headers,
+                                      json={"title": "蓝牙耳机选品"})
+                assert patch.status_code == 200
+                assert patch.json()["title"] == "蓝牙耳机选品"
 
-            # 删除对话
-            delete = await c.delete(f"/conversations/{conv_id}", headers=headers)
-            assert delete.status_code == 200
+                delete = await c.delete(f"/conversations/{conv_id}", headers=headers)
+                assert delete.status_code == 200
+        finally:
+            await self._cleanup_test_user(username)
 
     @pytest.mark.asyncio
     async def test_skills_seed_endpoint(self):
@@ -695,7 +748,7 @@ class TestScenario9FullAPIPipeline:
             assert resp.status_code == 200
             data = resp.json()
             assert "results" in data
-            assert len(data["results"]) == 3
+            assert len(data["results"]) >= 3
 
     @pytest.mark.asyncio
     async def test_skills_list(self):

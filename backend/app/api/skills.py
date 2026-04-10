@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.auth import get_current_user_id
@@ -29,6 +30,33 @@ async def create_skill_endpoint(
 ):
     result = await create_skill(db, data.model_dump(), created_by=user_id)
     return result
+
+
+class SkillInstallRequest(BaseModel):
+    url: str
+    bot_id: str | None = None
+
+
+@router.post("/install")
+async def install_skill_endpoint(
+    data: SkillInstallRequest,
+    user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """从 URL 下载并安装技能包"""
+    from app.services.skill_installer import install_skill_from_url
+
+    try:
+        result = await install_skill_from_url(
+            db=db,
+            url=data.url,
+            bot_id=data.bot_id,
+            user_id=user_id,
+        )
+        await db.commit()
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/seed")

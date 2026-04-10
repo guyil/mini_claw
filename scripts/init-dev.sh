@@ -6,6 +6,10 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+BACKEND_DIR="$PROJECT_DIR/backend"
+VENV_DIR="$BACKEND_DIR/.venv"
+PYTHON="$VENV_DIR/bin/python"
+PYTHON_VERSION="3.11"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -61,25 +65,44 @@ main() {
     done
     log_ok "PostgreSQL 已就绪"
 
-    # 2) 安装后端依赖
+    # 2) 创建 / 检查 Python venv
+    if [ ! -f "$PYTHON" ]; then
+        log_info "创建 Python $PYTHON_VERSION 虚拟环境..."
+        PYTHON_BIN="$(command -v "python${PYTHON_VERSION}" 2>/dev/null || true)"
+        if [ -z "$PYTHON_BIN" ]; then
+            log_error "未找到 python${PYTHON_VERSION}，请先安装: brew install python@${PYTHON_VERSION}"
+            exit 1
+        fi
+        "$PYTHON_BIN" -m venv "$VENV_DIR"
+        log_ok "venv 已创建: $($PYTHON --version)"
+    else
+        log_ok "venv 已存在: $($PYTHON --version)"
+    fi
+
+    # 3) 安装后端依赖
     log_info "安装后端 Python 依赖..."
-    cd "$PROJECT_DIR/backend"
-    python3 -m pip install -e ".[dev]" --quiet 2>/dev/null || python3 -m pip install -e ".[dev]"
+    cd "$BACKEND_DIR"
+    "$PYTHON" -m pip install -e ".[dev]" --quiet 2>/dev/null || "$PYTHON" -m pip install -e ".[dev]"
     log_ok "后端依赖已安装"
 
-    # 3) 运行数据库迁移
+    # 4) 安装 Crawl4AI 浏览器
+    log_info "安装 Crawl4AI Chromium 浏览器..."
+    "$PYTHON" -m patchright install chromium
+    log_ok "Chromium 浏览器已安装"
+
+    # 5) 运行数据库迁移
     log_info "运行数据库迁移 (Alembic)..."
-    cd "$PROJECT_DIR/backend"
-    python3 -m alembic upgrade head
+    cd "$BACKEND_DIR"
+    "$PYTHON" -m alembic upgrade head
     log_ok "数据库迁移完成"
 
-    # 4) 构建 CLI 沙箱镜像
+    # 6) 构建 CLI 沙箱镜像
     log_info "构建 CLI 沙箱 Docker 镜像..."
     cd "$PROJECT_DIR"
     docker build -t mclaw-sandbox:latest -f sandbox/Dockerfile sandbox/
     log_ok "沙箱镜像构建完成"
 
-    # 5) 安装前端依赖
+    # 7) 安装前端依赖
     if [ ! -d "$PROJECT_DIR/frontend/node_modules" ]; then
         log_info "安装前端依赖..."
         cd "$PROJECT_DIR/frontend"
@@ -94,7 +117,8 @@ main() {
     echo -e "  初始化完成！"
     echo ""
     echo -e "  启动服务:  ${BLUE}./scripts/start.sh${NC}"
-    echo -e "  运行测试:  ${BLUE}cd backend && python3 -m pytest tests/ -v${NC}"
+    echo -e "  激活 venv: ${BLUE}source backend/.venv/bin/activate${NC}"
+    echo -e "  运行测试:  ${BLUE}cd backend && .venv/bin/python -m pytest tests/ -v${NC}"
     echo -e "${GREEN}════════════════════════════════════════════${NC}"
     echo ""
 }

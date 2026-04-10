@@ -235,35 +235,41 @@ class TestSandboxSecurity:
             assert "安全策略阻止" not in result, f"安全命令被误阻止: {cmd}"
 
 
-class TestFeishuStubs:
-    """验证飞书 stub 工具返回合理数据"""
+class TestFeishuTools:
+    """验证飞书工具注册和条件逻辑"""
 
-    @pytest.mark.asyncio
-    async def test_all_stubs_return_stub_marker(self):
+    def test_no_tools_without_credentials(self):
+        from unittest.mock import patch
+
         from app.tools.feishu_tools import create_feishu_tools
 
-        tools = create_feishu_tools("test-user")
+        with patch("app.tools.feishu_tools.settings") as mock_settings:
+            mock_settings.feishu_app_id = ""
+            mock_settings.feishu_app_secret = ""
+            tools = create_feishu_tools(None, "test-user")
+            assert tools == []
 
-        for tool in tools:
-            if tool.name == "feishu_calendar_list":
-                result = await tool.ainvoke({"days": 7})
-            elif tool.name == "feishu_calendar_create":
-                result = await tool.ainvoke(
-                    {"title": "测试", "start": "2026-04-10 10:00", "end": "2026-04-10 11:00"}
-                )
-            elif tool.name == "feishu_doc_read":
-                result = await tool.ainvoke({"doc_url_or_token": "abc123"})
-            elif tool.name == "feishu_doc_create":
-                result = await tool.ainvoke({"title": "文档", "content_markdown": "# Hi"})
-            elif tool.name == "feishu_sheet_read":
-                result = await tool.ainvoke({"spreadsheet_token": "abc"})
-            elif tool.name == "feishu_sheet_write":
-                result = await tool.ainvoke({"spreadsheet_token": "abc"})
-            elif tool.name == "feishu_send_message":
-                result = await tool.ainvoke({"chat_id": "group-1", "text": "hello"})
-            elif tool.name == "feishu_task_create":
-                result = await tool.ainvoke({"title": "任务"})
-            else:
-                continue
+    def test_tools_registered_with_credentials(self):
+        from unittest.mock import patch
 
-            assert "Stub" in result, f"{tool.name} 未返回 Stub 标记"
+        from app.tools.feishu_tools import create_feishu_tools
+
+        with patch("app.tools.feishu_tools.settings") as mock_settings:
+            mock_settings.feishu_app_id = "test_id"
+            mock_settings.feishu_app_secret = "test_secret"
+            mock_settings.feishu_tools_doc = True
+            mock_settings.feishu_tools_wiki = True
+            mock_settings.feishu_tools_drive = True
+            mock_settings.feishu_tools_chat = True
+            mock_settings.feishu_tools_bitable = True
+            mock_settings.feishu_tools_perm = False
+            mock_settings.feishu_tools_calendar = True
+            mock_settings.feishu_tools_task = True
+
+            tools = create_feishu_tools(None, "test-user")
+            tool_names = {t.name for t in tools}
+            assert "feishu_doc" in tool_names
+            assert "feishu_wiki" in tool_names
+            assert "feishu_drive" in tool_names
+            assert "feishu_chat" in tool_names
+            assert "feishu_perm" not in tool_names

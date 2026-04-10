@@ -122,6 +122,170 @@ BUILTIN_SKILLS = [
         "required_tools": ["web_fetch"],
         "source": "builtin",
     },
+    {
+        "name": "feishu_doc_expert",
+        "display_name": "飞书文档专家",
+        "description": "读写飞书文档，支持富文本、表格、图片等结构化内容操作。",
+        "category": "feishu",
+        "instructions": """# 飞书文档专家 Skill
+
+## 核心工具
+`feishu_doc` — 统一的飞书文档操作工具。
+
+## Token 提取
+从 URL 提取 doc_token: `https://xxx.feishu.cn/docx/ABC123` → `doc_token='ABC123'`
+
+## 读取工作流
+1. 先用 `action='read'` 获取纯文本内容和块统计
+2. 如果返回结果包含 `hint`（有表格/图片），用 `action='list_blocks'` 获取结构化块数据
+3. 对特定块用 `action='get_block'` 查看详情
+
+## 写入工作流
+- **替换全文**: `action='write'`, 传入 Markdown 格式的 `content`
+- **追加内容**: `action='append'`, 在文档末尾追加
+- **插入内容**: `action='insert'`, 需要 `after_block_id`（先用 list_blocks 获取）
+- **创建新文档**: `action='create'`, 传入 `title`
+
+## 表格操作
+1. `action='create_table'` 创建空表格（指定 row_size, column_size）
+2. `action='write_table_cells'` 向表格写入数据（values 为二维数组 JSON）
+3. `action='create_table_with_values'` 一步创建带数据的表格
+
+## 块操作
+- `action='update_block'` 更新文本内容
+- `action='delete_block'` 删除块
+
+## Markdown 支持
+写入时支持: 标题(#), 列表(-/1.), 代码块(```), 引用(>), 粗体(**), 斜体(*),
+删除线(~~), 链接([text](url)), 分割线(---), 待办(- [ ]/- [x])
+
+## 限制
+- 一次最多插入 50 个块
+- 图片/文件上传需要有效的 drive 权限
+
+## 完成条件
+文档操作完成后调用 skill_complete 标记完成。
+""",
+        "required_tools": ["feishu_doc"],
+        "source": "builtin",
+    },
+    {
+        "name": "feishu_wiki_navigator",
+        "display_name": "飞书知识库导航",
+        "description": "浏览和管理飞书知识库空间、节点，配合文档工具读写页面内容。",
+        "category": "feishu",
+        "instructions": """# 飞书知识库导航 Skill
+
+## 核心工具
+`feishu_wiki` — 知识库结构操作
+`feishu_doc` — 页面内容读写
+
+## 核心工作流: Wiki + Doc 协作
+
+### 浏览知识库
+1. `feishu_wiki action='spaces'` → 获取知识库列表
+2. `feishu_wiki action='nodes' space_id='xxx'` → 浏览节点树
+3. `feishu_wiki action='get' token='xxx'` → 获取节点详情，得到 `obj_token`
+
+### 读取/编辑页面内容
+知识库页面的内容操作需要两步：
+1. 用 `feishu_wiki action='get'` 获取节点的 `obj_token`
+2. 用 `feishu_doc action='read' doc_token='{obj_token}'` 读写内容
+
+### 创建知识库页面
+`feishu_wiki action='create' space_id='xxx' title='标题'`
+
+### 移动/重命名
+- `feishu_wiki action='move'`
+- `feishu_wiki action='rename'`
+
+## 权限提示
+如果返回"没有访问权限"，需要在知识库设置中添加机器人为成员。
+
+## 完成条件
+操作完成后调用 skill_complete 标记完成。
+""",
+        "required_tools": ["feishu_wiki", "feishu_doc"],
+        "source": "builtin",
+    },
+    {
+        "name": "feishu_bitable_analyst",
+        "display_name": "飞书多维表格分析",
+        "description": "查询和操作飞书多维表格数据，适用于数据管理和分析场景。",
+        "category": "feishu",
+        "instructions": """# 飞书多维表格分析 Skill
+
+## 核心工具
+`feishu_bitable_get_meta` — 从 URL 获取表格元数据
+`feishu_bitable_list_fields` — 列出字段定义
+`feishu_bitable_list_records` — 列出数据记录
+`feishu_bitable_get_record` — 获取单条记录
+`feishu_bitable_create_record` — 创建记录
+`feishu_bitable_update_record` — 更新记录
+`feishu_bitable_create_app` — 创建新表格
+`feishu_bitable_create_field` — 添加字段
+
+## 工作流
+
+### 查看表格数据
+1. 用 `feishu_bitable_get_meta` 传入 URL，获取 app_token 和 table_id
+2. 用 `feishu_bitable_list_fields` 了解字段结构
+3. 用 `feishu_bitable_list_records` 获取数据
+
+### URL 格式
+- `/base/APP_TOKEN?table=TABLE_ID`
+- `/wiki/NODE_TOKEN?table=TABLE_ID`
+
+### 字段类型
+1=Text, 2=Number, 3=SingleSelect, 4=MultiSelect, 5=DateTime,
+7=Checkbox, 11=User, 15=URL, 17=Attachment, 20=Formula
+
+### 创建记录
+fields 参数为 JSON: `{"字段名": "值"}`
+
+## 完成条件
+数据操作完成后调用 skill_complete 标记完成。
+""",
+        "required_tools": [
+            "feishu_bitable_get_meta", "feishu_bitable_list_fields",
+            "feishu_bitable_list_records", "feishu_bitable_get_record",
+            "feishu_bitable_create_record", "feishu_bitable_update_record",
+        ],
+        "source": "builtin",
+    },
+    {
+        "name": "feishu_drive_manager",
+        "display_name": "飞书云空间管理",
+        "description": "浏览、管理飞书云空间中的文件和文件夹，支持文件操作和评论。",
+        "category": "feishu",
+        "instructions": """# 飞书云空间管理 Skill
+
+## 核心工具
+`feishu_drive` — 云空间文件操作
+
+## Actions
+- `list` — 列出文件夹内容 (folder_token)
+- `info` — 获取文件信息 (file_token, file_type)
+- `create_folder` — 创建文件夹 (name, folder_token)
+- `move` — 移动文件 (file_token, file_type, target_folder_token)
+- `delete` — 删除文件 (file_token, file_type)
+- `list_comments` — 列出评论
+- `add_comment` — 添加评论
+- `reply_comment` — 回复评论
+
+## 文件类型
+doc, sheet, bitable, mindnote, file, docx, folder
+
+## 注意事项
+- 机器人无法访问根文件夹，需要用户创建文件夹并共享给机器人
+- 删除操作不可逆，请确认后再执行
+
+## 完成条件
+文件操作完成后调用 skill_complete 标记完成。
+""",
+        "required_tools": ["feishu_drive"],
+        "source": "builtin",
+    },
 ]
 
 

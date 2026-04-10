@@ -13,6 +13,7 @@ dependencies = [
     "langchain-core>=0.3",
     "langchain-litellm>=0.6",
     "langchain-openai>=0.3",
+    "langsmith>=0.3",
     # 流式协议 (assistant-ui 对接)
     "assistant-stream>=0.0.30",
     # 数据库
@@ -26,10 +27,13 @@ dependencies = [
     "passlib[bcrypt]>=1.7",
     "bcrypt<4.1",
     "beautifulsoup4>=4.12",
-    "httpx>=0.28",
+    "httpx[socks]>=0.28",
+    "crawl4ai>=0.8",
     "redis>=5.0",
+    "lark-oapi>=1.5",
     "docker>=7.0",
     "pyyaml>=6.0",
+    "croniter>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -51,6 +55,11 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "e2e: end-to-end tests that require a running backend and LLM (deselect with '-m \"not e2e\"')",
+    "llm: tests that call real LLM APIs (deselect with '-m \"not llm\"')",
+]
+addopts = "-m 'not e2e and not llm'"
 
 [tool.ruff]
 target-version = "py311"
